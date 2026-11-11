@@ -32,10 +32,12 @@ WHAT THIS APP DOES
 """
 
 import glob
+import math
 import os
 
 import streamlit as st
 import pandas as pd
+import plotly.express as px
 import plotly.graph_objects as go
 from datetime import time, timedelta
 
@@ -205,7 +207,7 @@ monthly = build_monthly_summary(daily)
 
 plate = df["vehicle_plate_number"].iloc[0] if "vehicle_plate_number" in df.columns else file_label
 
-st.title("🚐 Eja-Ice Vehicle Telemetry Dashboard")
+st.title("🚐 Vehicle Telemetry Dashboard")
 st.caption(f"Vehicle: **{plate}** — timestamps shown in local time (UTC+{TIMEZONE_OFFSET_HOURS}). "
            f"Working hours = {WORK_START.strftime('%H:%M')}–{WORK_END.strftime('%H:%M')}.")
 
@@ -218,7 +220,7 @@ c2.metric("Lowest ambient_temp (month)",
           f"{monthly['min_ambient_temp']:.1f} °C" if monthly['min_ambient_temp'] is not None else "N/A",
           help=f"On {monthly['min_ambient_temp_date']}" if monthly['min_ambient_temp_date'] else None)
 c3.metric("Total distance (month)", f"{monthly['total_distance_km']:.2f} km")
-c4.metric("Total energy (month)", f"{monthly['total_energy']:.4f} KWh")
+c4.metric("Total energy (month)", f"{monthly['total_energy']:.4f}")
 
 st.divider()
 
@@ -242,7 +244,7 @@ d1.metric("Lowest sht_temp (working hrs)",
 d2.metric("Lowest ambient_temp (working hrs)",
           f"{day_row['min_ambient_temp']:.1f} °C" if pd.notna(day_row['min_ambient_temp']) else "N/A")
 d3.metric("Distance (reset-adjusted)", f"{day_row['distance_km']:.2f} km")
-d4.metric("Energy (reset-adjusted)", f"{day_row['energy']:.4f} KWh")
+d4.metric("Energy (reset-adjusted)", f"{day_row['energy']:.4f}")
 st.caption(f"Reset-adjusted totals sum every pre-reset high point up to the record closest to "
            f"{NIGHT_TARGET.strftime('%H:%M')} local time ({day_row['night_record_time']} was used for this day).")
 
@@ -305,3 +307,58 @@ st.dataframe(
     }),
     width='stretch',
 )
+
+
+# =============================================================================
+# LOCATION HEAT MAP (free OpenStreetMap tiles, no API key needed)
+# =============================================================================
+def estimate_zoom(lat_span: float, lon_span: float) -> float:
+    """Rough zoom level so all points fit in a ~900px wide map."""
+    span = max(lat_span, lon_span, 1e-4)
+    return float(min(max(math.log2(900 * 360 / (256 * span)) - 0.3, 2), 17))
+
+
+st.divider()
+st.subheader("📍 Location heat map")
+
+m1, m2, m3 = st.columns(3)
+map_scope = m1.radio("Show data for", ["Selected day", "Full month"], horizontal=True)
+map_wh_only = m2.checkbox("Working hours only (8am–7pm)", value=True)
+map_moving_only = m3.checkbox("Exclude stationary points (speed = 0)", value=False)
+heat_radius = st.slider("Heat radius", min_value=5, max_value=60, value=20)
+
+map_df = df if map_scope == "Full month" else day_df
+if map_wh_only:
+    map_df = map_df[working_hours_mask(map_df)]
+if map_moving_only:
+    map_df = map_df[map_df["speed"] > 0]
+map_df = map_df.dropna(subset=["lat", "long"])
+map_df = map_df[(map_df["lat"] != 0) & (map_df["long"] != 0)]  # drop GPS "no fix" points
+
+if map_df.empty:
+    st.info("No GPS points match the current filters.")
+else:
+    center_lat = float(map_df["lat"].mean())
+    center_lon = float(map_df["long"].mean())
+    zoom = estimate_zoom(map_df["lat"].max() - map_df["lat"].min(),
+                         map_df["long"].max() - map_df["long"].min())
+
+    try:
+        heat_fig = px.density_map(
+            map_df, lat="lat", lon="long", radius=heat_radius,
+            center=dict(lat=center_lat, lon=center_lon), zoom=zoom,
+            map_style="open-street-map", color_continuous_scale="YlOrRd",
+            height=600,
+        )
+    except AttributeError:  # older plotly versions
+        heat_fig = px.density_mapbox(
+            map_df, lat="lat", lon="long", radius=heat_radius,
+            center=dict(lat=center_lat, lon=center_lon), zoom=zoom,
+            mapbox_style="open-street-map", color_continuous_scale="YlOrRd",
+            height=600,
+        )
+
+    heat_fig.update_layout(margin=dict(l=0, r=0, t=0, b=0), coloraxis_showscale=False)
+    st.plotly_chart(heat_fig, width='stretch')
+    st.caption(f"{len(map_df):,} GPS points plotted. Brighter areas = more readings recorded there "
+               f"(so places where the vehicle spent more time). Map © OpenStreetMap contributors.")
