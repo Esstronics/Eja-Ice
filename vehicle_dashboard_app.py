@@ -347,7 +347,7 @@ else:
         heat_fig = px.density_map(
             map_df, lat="lat", lon="long", radius=heat_radius,
             center=dict(lat=center_lat, lon=center_lon), zoom=zoom,
-            map_style="open-street-map", color_continuous_scale=["rgba(0,0,255,0)", "#7ec8ff", "#1e6fff", "#0033a0"]",
+            map_style="open-street-map", color_continuous_scale=["rgba(0,0,255,0)", "#7ec8ff", "#1e6fff", "#0033a0"],
             height=600,
         )
     except AttributeError:  # older plotly versions
